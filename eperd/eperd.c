@@ -20,6 +20,15 @@
 //config:       help
 //config:           Eperd periodically runs Atlas measurements. It is based on crond.
 
+//config:config FEATURE_ATLAS_ADDRESS_CHECK
+//config:	bool "Atlas IP address check."
+//config:	default n
+//config:	depends on EPERD
+//config:	help
+//config:	    If enabled atlas eperd tools will not allow private
+//config:	    IP addresses, most of RFC1918, as targets
+//config:	    result": [ { "error":"address not allowed" } ]
+
 //applet:IF_EPERD(APPLET(eperd, BB_DIR_BIN, BB_SUID_DROP))
 
 //kbuild:lib-$(CONFIG_EPERD) += eooqd.o eperd.o condmv.o httpget.o ping.o sslgetcert.o traceroute.o evhttpget.o evping.o evsslgetcert.o evtdig.o evtraceroute.o tcputil.o readresolv.o evntp.o ntp.o

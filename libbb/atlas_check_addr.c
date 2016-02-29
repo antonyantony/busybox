@@ -38,6 +38,10 @@ static bad_ipv6[] =
 
 int atlas_check_addr(const struct sockaddr *sa, socklen_t len)
 {
+
+#if !ENABLE_FEATURE_ATLAS_ADDRESS_CHECK
+	return 1; /* disable the check. Accept all addresses */
+#else
 	uint16_t addr2, mask2;
 	int i, j, prefix_len;
 	uint32_t addr4, mask4;
@@ -115,6 +119,7 @@ int atlas_check_addr(const struct sockaddr *sa, socklen_t len)
 		return 0;
 	}
 	return -1;	/* Default to not allowed */
+#endif /* #if !ENABLE_FEATURE_ATLAS_ADDRESS_CHECK */
 }
 
 #if 0	/* Not yet needed */
