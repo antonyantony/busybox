@@ -54,8 +54,8 @@ if [ -n "$DO_INSTALL_LIBS" ] && [ "$DO_INSTALL_LIBS" != "n" ]; then
 	done
 fi
 
-if [ "$cleanup" = "1" ] && [ -e "$prefix/bin/busybox" ]; then
-	inode=`ls -i "$prefix/bin/busybox" | awk '{print $1}'`
+if [ "$cleanup" = "1" ] && [ -e "$prefix/bin/atlasprobe" ]; then
+	inode=`ls -i "$prefix/bin/atlasprobe" | awk '{print $1}'`
 	sub_shell_it=`
 		cd "$prefix"
 		for d in usr/sbin usr/bin sbin bin; do
@@ -70,9 +70,9 @@ if [ "$cleanup" = "1" ] && [ -e "$prefix/bin/busybox" ]; then
 	exit 0
 fi
 
-rm -f "$prefix/bin/busybox" || exit 1
+rm -f "$prefix/bin/atlasprobe" || exit 1
 mkdir -p "$prefix/bin" || exit 1
-install -m 755 busybox "$prefix/bin/busybox" || exit 1
+install -m 755 busybox "$prefix/bin/atlasprobe" || exit 1
 
 for i in $h; do
 	appdir=`dirname "$i"`
@@ -80,10 +80,10 @@ for i in $h; do
 	mkdir -p "$prefix/$appdir" || exit 1
 	if [ "$scriptwrapper" = "y" ]; then
 		if [ "$swrapall" != "y" ] && [ "$i" = "/bin/sh" ]; then
-			ln $linkopts busybox "$prefix/$i" || exit 1
+			ln $linkopts atlasprobe "$prefix/$i" || exit 1
 		else
 			rm -f "$prefix/$i"
-			echo "#!/bin/busybox" >"$prefix/$i"
+			echo "#!/bin/atlasprobe" >"$prefix/$i"
 			chmod +x "$prefix/$i"
 		fi
 		echo "	$prefix/$i"
@@ -102,20 +102,20 @@ for i in $h; do
 		fi
 	else
 		if [ "$2" = "--hardlinks" ]; then
-			bb_path="$prefix/bin/busybox"
+			bb_path="$prefix/bin/atlasprobe"
 		else
 			case "$appdir" in
 			/)
-				bb_path="bin/busybox"
+				bb_path="bin/atlasprobe"
 			;;
 			/bin)
-				bb_path="busybox"
+				bb_path="atlasprobe"
 			;;
 			/sbin)
-				bb_path="../bin/busybox"
+				bb_path="../bin/atlasprobe"
 			;;
 			/usr/bin | /usr/sbin)
-				bb_path="../../bin/busybox"
+				bb_path="../../bin/atlasprobe"
 			;;
 			*)
 				echo "Unknown installation directory: $appdir"
