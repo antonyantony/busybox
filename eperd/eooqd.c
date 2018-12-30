@@ -11,6 +11,12 @@
 //config:       help
 //config:           Eooqd runs Atlas measurements just once.
 
+//config:config FEATURE_EOOQD_QUES
+//config:       int "#Simultaneous EOOQD Ques. Will consume FD"
+//config:       range 1 8192
+//config:       default 10
+//config:       depends on EOOQD
+
 //applet:IF_EOOQD(APPLET(eooqd, BB_DIR_BIN, BB_SUID_DROP))
 
 //kbuild:lib-$(CONFIG_EOOQD) += eooqd.o
@@ -188,7 +194,7 @@ int eooqd_main(int argc, char *argv[])
 	state->atlas_id= atlas_id;
 	state->queue_file= argv[optind];
 
-	state->max_busy= 10;
+	state->max_busy= CONFIG_FEATURE_EOOQD_QUES;
 
 	state->slots= xzalloc(sizeof(*state->slots) * state->max_busy);
 
