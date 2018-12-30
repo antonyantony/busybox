@@ -228,6 +228,7 @@ int eooqd_main(int argc, char *argv[])
 		crondlog(DIE9 "evdns_base_new failed"); /* exits */
 	}
 
+#if ENABLE_FEATURE_ATLAS_INTERFACE_SUPPORT
 	if (interface_name)
 	{
 		r= evdns_base_set_interface(DnsBase, interface_name);
@@ -238,6 +239,7 @@ int eooqd_main(int argc, char *argv[])
 							 /* exits */
 		}
 	}
+#endif
 
 	r = evdns_base_resolv_conf_parse(DnsBase, DNS_OPTIONS_ALL,
 		resolv_conf);
