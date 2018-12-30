@@ -25,6 +25,12 @@
 //config:       help
 //config:        extra debug info. Also may cause segfault or/and memory leak. Add at your own risk.
 
+//config:config FEATURE_EVTDIG_TIMEOUT_MILLISECONDS
+//config:       int "timeout in milliseconds"
+//config:       range 1 129000
+//config:       default 5000
+//config:       depends on EOOQD
+
 //applet:IF_EVTDIG(APPLET(evtdig, BB_DIR_BIN, BB_SUID_DROP))
 
 //kbuild:lib-$(CONFIG_EVTDIG) += evtdig.o
@@ -113,7 +119,7 @@
 #define MAX_DNS_OUT_BUF_SIZE   512
 
 /* Intervals and timeouts (all are in milliseconds unless otherwise specified) */
-#define DEFAULT_NOREPLY_TIMEOUT 5000           /* 5000 msec - 0 is illegal      */
+#define DEFAULT_NOREPLY_TIMEOUT CONFIG_FEATURE_EVTDIG_TIMEOUT_MILLISECONDS /* msec - 0 is illegal      */
 #define DEFAULT_LINE_LENGTH 256 
 #define DEFAULT_STATS_REPORT_INTERVEL 180 		/* in seconds */
 #define CONN_TO            5  /* TCP connection time out in seconds */
