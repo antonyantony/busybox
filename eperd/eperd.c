@@ -29,6 +29,22 @@
 //config:	    IP addresses, most of RFC1918, as targets
 //config:	    result": [ { "error":"address not allowed" } ]
 
+//config:config FEATURE_ATLAS_VALID_PATH_CHECK
+//config:	bool "Atlas IP address output file path check."
+//config:	default n
+//config:	depends on EPERD
+//config:	help
+//config:	    If enabled atlas eperd tools will validate path.
+//config:	    result": [ { "error":" output path validation enabled " } ]
+
+//config:config FEATURE_ATLAS_INTERFACE_SUPPORT
+//config:       bool "Atlas set interface"
+//config:       default n
+//config:       depends on EPERD
+//config:       help
+//config:           If enabled support setting interfaces
+//config:           result": [ { "error":" no interface support" } ]
+
 //applet:IF_EPERD(APPLET(eperd, BB_DIR_BIN, BB_SUID_DROP))
 
 //kbuild:lib-$(CONFIG_EPERD) += eooqd.o eperd.o condmv.o httpget.o ping.o sslgetcert.o traceroute.o evhttpget.o evping.o evsslgetcert.o evtdig.o evtraceroute.o tcputil.o readresolv.o evntp.o ntp.o
@@ -364,6 +380,7 @@ int eperd_main(int argc UNUSED_PARAM, char **argv)
 		crondlog(DIE9 "evdns_base_new failed"); /* exits */
 	}
 
+#if ENABLE_FEATURE_ATLAS_INTERFACE_SUPPORT
 	if (interface_name)
 	{
 		r= evdns_base_set_interface(DnsBase, interface_name);
@@ -374,6 +391,7 @@ int eperd_main(int argc UNUSED_PARAM, char **argv)
 							 /* exits */
 		}
 	}
+#endif
 
 	r = evdns_base_resolv_conf_parse(DnsBase, DNS_OPTIONS_ALL,
 		resolv_conf);
