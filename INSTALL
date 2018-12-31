@@ -9,7 +9,24 @@ The BusyBox build process is similar to the Linux kernel build:
   cd ../
   make menuconfig     # This creates a file called ".config"
   make                # This creates the "busybox" executable
-  make CONFIG_PREFIX=/usr/local//atlas/bb-13.3 install #RIPE NCC atlas install
+  make install #RIPE NCC atlas install
+
+  mkdir -p /tmp/eperd/new /tmp/eperd/out /tmp/eperd/cron
+
+  cp examples/cron.root.7 /tmp/eperd/cron/root
+
+  # start eperd it willre read the file /tmp/eperd/cron/root
+  ./_install/bin/eperd -O /tmp/eperd/new/eperd -c /tmp/eperd/cron/
+  # it is ok to see
+  # eperd: in my_exit (exit was called!)
+  # Aborted (core dumped)
+
+  pidof eperd #you should see the PID of the process eperd.
+  sleep 120
+ 
+  find /tmp/eperd/
+  cat /tmp/eperd/out/* # the new output
+ 
 
 The full list of configuration and install options is available by typing:
 
