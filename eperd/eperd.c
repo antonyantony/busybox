@@ -45,6 +45,14 @@
 //config:           If enabled support setting interfaces
 //config:           result": [ { "error":" no interface support" } ]
 
+//config:config FEATURE_ATLAS_VALID_PATH_CHECK
+//config:      bool "Atlas output file path check."
+//config:      default n
+//config:      depends on EPERD
+//config:      help
+//config:          If enabled atlas eperd tools will validate path.
+//config:          result": [ { "error":" output path validation enabled " } ]
+
 //applet:IF_EPERD(APPLET(eperd, BB_DIR_BIN, BB_SUID_DROP))
 
 //kbuild:lib-$(CONFIG_EPERD) += eooqd.o eperd.o condmv.o httpget.o ping.o sslgetcert.o traceroute.o evhttpget.o evping.o evsslgetcert.o evtdig.o evtraceroute.o tcputil.o readresolv.o evntp.o ntp.o
