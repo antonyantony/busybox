@@ -125,7 +125,11 @@ static char *rebased_validated_common(const char *path, const char *prefix,
 
 char *rebased_validated_filename(const char *path, const char *prefix)
 {
+#if FEATURE_ATLAS_VALID_PATH_CHECK
 	return rebased_validated_common(path, prefix, 1 /*require_slash*/);
+#else
+	return strdup(path);
+#endif
 }
 
 char *rebased_validated_dir(const char *path, const char *prefix)
