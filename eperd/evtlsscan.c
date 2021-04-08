@@ -619,7 +619,6 @@ static void fmt_ssl_host(struct tls_qry *qry, bool is_err)
 static void fmt_ssl_ui_result(struct tls_qry *qry)
 {
 	int lts =  -1 ; /*  get_timesync(); */ /* AA_FIXME */
-	int fw = get_atlas_fw_version();
 	struct buf *lbuf = &qry->ui->result;
 
 	AS("RESULT { ");
@@ -627,7 +626,7 @@ static void fmt_ssl_ui_result(struct tls_qry *qry)
 	{
 		JS(id, qry->ui->str_Atlas);
 	}
-	JD(fw, fw);
+	AS(atlas_get_version_json_str());
 	JD(dnscount, qry->ui->dns_count);
 	JS1(time, %ld, qry->ui->start_time.tv_sec);
 	JD(lts,lts); // fix me take lts when I create start time.
@@ -1360,7 +1359,7 @@ static void printErrorQuick (struct tls_state *pqry)
 		fh = stdout;
 
 	fprintf(fh, "RESULT { ");
-	fprintf(fh, "\"fw\" : \"%d\",", get_atlas_fw_version());
+	fprintf(fh, "%s", atlas_get_version_json_str());
 	fprintf(fh, "\"id\" : 9203 ,");
 	gettimeofday(&now, NULL);
 	fprintf(fh, "\"time\" : %ld ,",  now.tv_sec);
