@@ -77,9 +77,9 @@ struct tls_base {
 
 static void crondlog_aa(const char *ctl, char *fmt, ...);
 
-/* 
+/*
  * this user query one per user input aka pqry
- * Child query and Grand children are the actual queries 
+ * Child query and Grand children are the actual queries
  */
 struct tls_state {
 	char *host;
@@ -129,7 +129,7 @@ struct tls_state {
 	char *out_filename;
 	char *str_Atlas; /* option but without opt_ prefix. Historic */
 
-	struct tls_qry *c; 
+	struct tls_qry *c;
 	struct event done_ev;
 	void (*done)(void *state); /* call back when all queries are done */
 };
@@ -170,7 +170,7 @@ struct tls_qry {
 	struct event timeout_ev;
 	struct event free_child_ev;
 	bool is_c; 	/* is children? same destination (IP) with different ssl option */
-	int active_c; /* count of active children. delete parent when zero */ 
+	int active_c; /* count of active children. delete parent when zero */
 	struct tls_qry *p ; /* parent query to same IP with all ciphers */
 	bool tls_incomplete;
 	enum readstate readstate; 	/* httpget */
@@ -255,8 +255,8 @@ static bool tls_inst_start (struct tls_qry *qry, const char *cipher_q)
 {
 	/* OpenSSL is initialized, SSL_library_init() should be called already */
 
-	/* 
-	 ssl_ctx are not shared between quries. It could but not sure how to 
+	/*
+	 ssl_ctx are not shared between quries. It could but not sure how to
 	 set structures with specific versions and algorithms. Instead using
 	 one ctx per query.
 	 */
@@ -340,7 +340,7 @@ static bool tls_inst_start (struct tls_qry *qry, const char *cipher_q)
 				qry->addr_curr->ai_addr,
 				qry->addr_curr->ai_addrlen)) {
 		crondlog_aa(LVL8, "ERROR bufferevent_socket_connect to %s \"%s\""
-				"ctive = %d %s %s - %s", qry->addrstr, qry->ui->host, 
+				"ctive = %d %s %s - %s", qry->addrstr, qry->ui->host,
 				qry->ui->active, qry->sslv_str, qry->cipher_q,
 				evutil_socket_error_to_string(EVUTIL_SOCKET_ERROR())
 				);
@@ -433,26 +433,26 @@ static char * add_cert_and_fp(unsigned char *md, X509* cert, struct tls_qry *qry
 	unsigned int n;
 	struct cert_fp *cfp = qry->cfps;
 	const EVP_MD *fdig = EVP_sha1();
-	int i = 0; 
+	int i = 0;
 
 
-	if (X509_digest(cert,fdig,md,&n) == 0) 
+	if (X509_digest(cert,fdig,md,&n) == 0)
 	{
 		return "error in X509_digest";
 	}
 
 	*id = -1;
 	while ( cfp != NULL) {
-		if (memcmp(md, cfp->fp, EVP_MAX_MD_SIZE) == 0) 
+		if (memcmp(md, cfp->fp, EVP_MAX_MD_SIZE) == 0)
 		{
 			*id = i;
 			break;
 		}
 		i++;
 		cfp = cfp->next;
-	} 
+	}
 
-	/* this is a new certificate add to chain */ 
+	/* this is a new certificate add to chain */
 
 	if (*id == -1) {
 		struct buf *lbuf = qry->cc;
@@ -509,7 +509,7 @@ static void add_cert_chain( STACK_OF(X509) *sk, struct tls_qry *qry) {
 
 		if(err_s  != NULL) {
 			struct buf *lbuf = &qry->err;
-			if(lbuf->size > 0) 
+			if(lbuf->size > 0)
 				AS (",");
 			JS_NC(X509cert, err_s);
 		}
@@ -529,7 +529,7 @@ static void get_cert_chain(struct tls_qry *qry)
 	sk = SSL_get_peer_cert_chain(qry->ssl);
 	if(sk == NULL) {
 		lbuf = &qry->err;
-		if(lbuf->size > 0) 
+		if(lbuf->size > 0)
 			AS (",");
 		JS_NC(X509cert_chain, "no cert chain found after handshake");
 
@@ -644,7 +644,7 @@ static void fmt_ssl_summary(struct tls_qry *qry, bool is_err)
 	struct buf *lbuf = qry->result;
 
 	if (qry->addr_curr == NULL)
-		return; 
+		return;
 
 	if (size == 0){
 		AS ("{");
@@ -677,8 +677,8 @@ static void fmt_ssl_summary(struct tls_qry *qry, bool is_err)
 		get_cert_chain(qry);
 
 		if ((qry->is_c == FALSE) && (qry->ui->opt_all_tests == TRUE))  {
-			/* this is a successful child. 
-			 * create children with cipher algorithm varients 
+			/* this is a successful child.
+			 * create children with cipher algorithm varients
 			 */
 			ssl_c_init(qry);
 		}
@@ -732,8 +732,8 @@ static void fmt_ssl_cert_full_resp(struct tls_qry *qry, bool is_err)
 	 	add_certs_to_result(qry);
 
 		if ((qry->is_c == FALSE) && (qry->ui->opt_all_tests == TRUE))  {
-			/* this is a successful child. 
-			 * create children with cipher algorithm varients 
+			/* this is a successful child.
+			 * create children with cipher algorithm varients
 			 */
 			ssl_c_init(qry);
 		}
@@ -804,7 +804,7 @@ static void print_tls_resp(struct tls_qry *qry, bool is_err) {
 		qry->ui->active--;
 
 	if ((qry->p != NULL ) && (qry->p->active_c > 0)) {
-		qry->p->active_c--; 
+		qry->p->active_c--;
 		active_c = qry->p->active_c;
 	}
 
@@ -834,11 +834,11 @@ static void print_tls_resp(struct tls_qry *qry, bool is_err) {
 				AS("}");
 				buf_cleanup(&qry->err);
 			}
-			
+
 			if (qry->cc->size > 0) {
 				buf_add(&qry->ui->result, qry->cc->buf, qry->cc->size);
 				buf_cleanup(qry->cc);
-			} 
+			}
 
 			if (qry->ciphers_s_buf->size > 0) {
 				buf_add(qry->ciphers_s_buf, "]", 1);
@@ -883,7 +883,7 @@ int tlsscan_delete (void *st)
 	if (pqry->state )
 		return 0;
 
-	if(pqry->out_filename != NULL) 
+	if(pqry->out_filename != NULL)
 	{
 		free(pqry->out_filename);
 		pqry->out_filename = NULL;
@@ -918,7 +918,7 @@ static void timeout_cb(int unused  UNUSED_PARAM, const short event
 		crondlog_aa(LVL7, "%s %s",  __func__, qry->ui->host);
 	} else {
 		int active_c = 0;
-		if (qry->p != NULL) 
+		if (qry->p != NULL)
 			active_c = qry->active_c;
 
 		crondlog_aa(LVL7, "%s no output yet, dst %s active = %d"
@@ -1008,7 +1008,7 @@ static bool verify_ssl_cert (struct tls_qry *qry) {
 
 	/* Attempt to use the system's trusted root certificates.
 	 * (This path is only valid for Debian-based systems.) */
-	 //if (1 != SSL_CTX_load_verify_locations(qry->ssl_ctx, "/etc/ssl/certs/ca-certificates.crt", NULL)) crondlog(LVL7,"SSL_CTX_load_verify_locations"); 
+	 //if (1 != SSL_CTX_load_verify_locations(qry->ssl_ctx, "/etc/ssl/certs/ca-certificates.crt", NULL)) crondlog(LVL7,"SSL_CTX_load_verify_locations");
 
 	/* Ask OpenSSL to verify the server certificate.  Note that this
 	 * does NOT include verifying that the hostname is correct.
@@ -1092,7 +1092,7 @@ static void http_read_cb(struct bufferevent *bev UNUSED_PARAM, void *ptr)
 	struct tls_qry  *qry = ptr;
 	int active_c = 0;
 
-	if (qry->p != NULL) 
+	if (qry->p != NULL)
 		active_c = qry->p->active_c;
 
 	crondlog_aa(LVL7, "%s BEV_EVENT_CONNECTED active = %d active_c = %d %s %s %s %s",  __func__,
@@ -1123,7 +1123,7 @@ static void write_cb(struct bufferevent *bev, void *ptr)
 			qry->writestate= WRITE_HEADER;
 			continue;
 		case WRITE_HEADER:
-			output= bufferevent_get_output(bev); 
+			output= bufferevent_get_output(bev);
 			evbuffer_add_printf(output, "%s %s HTTP/1.%c\r\n",
 				qry->ui->do_get ? "GET" :
 				qry->ui->do_head ? "HEAD" : "POST", qry->ui->path,
@@ -1274,8 +1274,8 @@ static struct tls_state * tlsscan_init (int argc, char *argv[], void (*done)(voi
 
 	return pqry;
 }
- 
-static bool tls_inst_init(struct tls_state *pqry, struct evutil_addrinfo *addr_curr, int sslv) 
+
+static bool tls_inst_init(struct tls_state *pqry, struct evutil_addrinfo *addr_curr, int sslv)
 {
 	struct  tls_qry *qry = xzalloc(sizeof(struct tls_qry));
 
@@ -1340,7 +1340,7 @@ static void dns_cb(int result, struct evutil_addrinfo *res, void *ctx)
 	}
 }
 
-static void printErrorQuick (struct tls_state *pqry) 
+static void printErrorQuick (struct tls_state *pqry)
 {
 	FILE *fh;
 
