@@ -46,6 +46,14 @@
 //config:	With this option off, ping will say "HOST is alive!"
 //config:	or terminate with SIGALRM in 5 seconds otherwise.
 //config:	No command-line options will be recognized.
+//config:
+//config:config FEATURE_ESP_PING
+//config:	bool "ESP ping support (-e plain SPI 7/8, -E SPI encrypted)"
+//config:	default y
+//config:	depends on FEATURE_FANCY_PING
+//config:	help
+//config:	-e sends plain ESP ping (IANA-reserved SPI 7/8, no SA needed).
+//config:	-E SPI sends encrypted ESP ping inside an existing SA.
 
 /* Needs socket(AF_INET, SOCK_RAW, IPPROTO_ICMP), therefore BB_SUID_MAYBE: */
 //applet:IF_PING(APPLET(ping, BB_DIR_BIN, BB_SUID_MAYBE))
@@ -83,6 +91,10 @@
 //usage:     "\n			(can exit earlier with -c CNT)"
 //usage:     "\n	-q		Quiet, only display output at start/finish"
 //usage:     "\n	-p HEXBYTE	Payload pattern"
+//usage:	IF_FEATURE_ESP_PING(
+//usage:     "\n	-e		Plain ESP ping (SPI 7/8, no SA needed)"
+//usage:     "\n	-E SPI		Encrypted ESP ping via SA with given SPI"
+//usage:	)
 //usage:
 //usage:# define ping6_trivial_usage
 //usage:       "[OPTIONS] HOST"
@@ -397,8 +409,27 @@ static int common_ping_main(sa_family_t af, char **argv)
 
 /* Full(er) version */
 
+#if ENABLE_FEATURE_ESP_PING
+/* BusyBox does not use kernel headers; define what we need locally */
+# ifndef IPPROTO_ESP
+#  define IPPROTO_ESP          50
+# endif
+# define IP_ESP_PING_SPI       53   /* setsockopt level SOL_IP */
+# define ESP_PING_SPI_REQUEST   7   /* IANA-reserved: plain echo request */
+# define ESP_PING_SPI_REPLY     8   /* IANA-reserved: plain echo reply   */
+# define ESP_ECHO_REQUEST       2   /* AGGFRAG sub-type: initiator->responder */
+# define ESP_ECHO_RESPONSE      3   /* AGGFRAG sub-type: responder->initiator */
+struct esp_echo_hdr {
+	uint8_t  sub_type;
+	uint8_t  flags;
+	uint16_t data_len;
+	uint16_t id;
+	uint16_t seq;
+};
+#endif /* ENABLE_FEATURE_ESP_PING */
+
 /* -c NUM, -t NUM, -w NUM, -W NUM */
-#define OPT_STRING "qvAc:+s:t:+w:+W:+I:np:i:4"IF_PING6("6")
+#define OPT_STRING "qvAc:+s:t:+w:+W:+I:np:i:4"IF_PING6("6")IF_FEATURE_ESP_PING("eE:")
 enum {
 	OPT_QUIET = 1 << 0,
 	OPT_VERBOSE = 1 << 1,
@@ -414,6 +445,8 @@ enum {
 	OPT_i = 1 << 11,
 	OPT_IPV4 = 1 << 12,
 	OPT_IPV6 = (1 << 13) * ENABLE_PING6,
+	OPT_ESP_PLAIN = (1 << 14) * ENABLE_FEATURE_ESP_PING,  /* -e */
+	OPT_ESP_ENC   = (1 << 15) * ENABLE_FEATURE_ESP_PING,  /* -E SPI */
 };
 
 
@@ -427,6 +460,9 @@ struct globals {
 	unsigned long ntransmitted, nreceived, nrepeats;
 	uint16_t myid;
 	uint8_t pattern;
+#if ENABLE_FEATURE_ESP_PING
+	uint32_t esp_spi;  /* 0 = plain SPI 7/8 (-e), nonzero = encrypted (-E) */
+#endif
 	unsigned tmin, tmax; /* in us */
 	unsigned long long tsum; /* in us, sum of all times */
 	unsigned cur_us; /* low word only, we don't need more */
@@ -463,6 +499,9 @@ struct globals {
 #define dotted       (G.dotted      )
 #define pingaddr     (G.pingaddr    )
 #define rcvd_tbl     (G.rcvd_tbl    )
+#if ENABLE_FEATURE_ESP_PING
+# define esp_spi     (G.esp_spi     )
+#endif
 #define INIT_G() do { \
 	setup_common_bufsiz(); \
 	BUILD_BUG_ON(sizeof(G) > COMMON_BUFSIZE); \
@@ -689,6 +728,99 @@ static void unpack_tail(int sz, uint32_t *tp,
 	puts(dupmsg);
 	fflush_all();
 }
+#if ENABLE_FEATURE_ESP_PING
+static void sendping_esp_plain(int junk UNUSED_PARAM)
+{
+	struct {
+		uint32_t spi;
+		uint32_t seq_no;
+		struct esp_echo_hdr eh;
+	} *pkt = G.snd_packet;
+
+	memset(pkt, 0, sizeof(*pkt) + datalen);
+	pkt->spi    = htonl(ESP_PING_SPI_REQUEST);
+	pkt->seq_no = htonl(G.ntransmitted);
+	pkt->eh.sub_type = ESP_ECHO_REQUEST;
+	pkt->eh.flags    = 0;
+	pkt->eh.data_len = htons(datalen);
+	pkt->eh.id       = myid;
+	pkt->eh.seq      = htons(G.ntransmitted);
+	*(uint32_t *)(pkt + 1) = G.cur_us = monotonic_us();
+
+	sendping_tail(sendping_esp_plain, sizeof(*pkt));
+}
+
+static int unpack_esp_plain(char *buf, int sz, struct sockaddr_in *from)
+{
+	struct iphdr *iph = (struct iphdr *)buf;
+	int hlen = iph->ihl << 2;
+	uint32_t *esph = (uint32_t *)(buf + hlen);
+	struct esp_echo_hdr *eh;
+	uint16_t recv_seq;
+	uint32_t *tp = NULL;
+
+	sz -= hlen;
+	if (sz < (int)(2 * sizeof(uint32_t) + sizeof(struct esp_echo_hdr)))
+		return 0;
+
+	if (ntohl(esph[0]) != ESP_PING_SPI_REPLY)
+		return 0;
+
+	eh = (struct esp_echo_hdr *)(esph + 2);
+	if (eh->sub_type != ESP_ECHO_RESPONSE)
+		return 0;
+	if (eh->id != myid)
+		return 0;
+
+	recv_seq = ntohs(eh->seq);
+	if (sz >= (int)(2 * sizeof(uint32_t) + sizeof(*eh) + sizeof(uint32_t)))
+		tp = (uint32_t *)(eh + 1);
+
+	unpack_tail(sz, tp,
+		inet_ntoa(*(struct in_addr *)&from->sin_addr.s_addr),
+		recv_seq, iph->ttl);
+	return 1;
+}
+
+static void ping_esp_plain(len_and_sockaddr *lsa)
+{
+	int sockopt;
+
+	pingaddr.sin = lsa->u.sin;
+	if (source_lsa)
+		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
+
+	sockopt = (datalen * 2) + 7 * 1024;
+	setsockopt_SOL_SOCKET_int(pingsock, SO_RCVBUF, sockopt);
+
+	if (opt_ttl != 0)
+		setsockopt_int(pingsock, IPPROTO_IP, IP_TTL, opt_ttl);
+
+	signal(SIGINT, print_stats_and_exit);
+
+ send_ping:
+	sendping_esp_plain(0);
+
+	while (1) {
+		struct sockaddr_in from;
+		socklen_t fromlen = sizeof(from);
+		int c;
+
+		c = recvfrom(pingsock, G.rcv_packet, G.sizeof_rcv_packet, 0,
+				(struct sockaddr *)&from, &fromlen);
+		if (c < 0) {
+			if (errno != EINTR)
+				bb_simple_perror_msg("recvfrom");
+			continue;
+		}
+		c = unpack_esp_plain(G.rcv_packet, c, &from);
+		if (pingcount && G.nreceived >= pingcount)
+			break;
+		if (c && (option_mask32 & OPT_A))
+			goto send_ping;
+	}
+}
+#endif /* ENABLE_FEATURE_ESP_PING */
 static int unpack4(char *buf, int sz, struct sockaddr_in *from)
 {
 	struct icmp *icmppkt;
@@ -915,6 +1047,22 @@ static void ping(len_and_sockaddr *lsa)
 	}
 	printf(": %d data bytes\n", datalen);
 
+#if ENABLE_FEATURE_ESP_PING
+	if (option_mask32 & (OPT_ESP_PLAIN | OPT_ESP_ENC)) {
+		int sock = xsocket(AF_INET, SOCK_RAW, IPPROTO_ESP);
+		if (str_I)
+			setsockopt_bindtodevice(sock, str_I);
+		xmove_fd(sock, pingsock);
+		G.sizeof_rcv_packet = datalen + MAXIPLEN + 2 * sizeof(uint32_t)
+				      + sizeof(struct esp_echo_hdr) + 4;
+		G.rcv_packet = xzalloc(G.sizeof_rcv_packet);
+		/* snd: [spi][seq][esp_echo_hdr][data][+4 for timestamp overflow] */
+		G.snd_packet = xzalloc(2 * sizeof(uint32_t)
+				       + sizeof(struct esp_echo_hdr) + datalen + 4);
+		ping_esp_plain(lsa);
+		return;
+	}
+#endif
 	create_icmp_socket(lsa);
 	/* untested whether "-I addr" really works for IPv6: */
 	if (str_I)
@@ -942,6 +1090,9 @@ static int common_ping_main(int opt, char **argv)
 	char *str_s, *str_p;
 	char *str_i = (char*)"1";
 	duration_t interval;
+#if ENABLE_FEATURE_ESP_PING
+	char *str_E = NULL;
+#endif
 
 	INIT_G();
 
@@ -950,7 +1101,14 @@ static int common_ping_main(int opt, char **argv)
 			/* exactly one arg; -v and -q don't mix */
 			"\0" "=1:q--v:v--q",
 			&pingcount, &str_s, &opt_ttl, &G.deadline_us, &timeout, &str_I, &str_p, &str_i
+			IF_FEATURE_ESP_PING(, &str_E)
 	);
+#if ENABLE_FEATURE_ESP_PING
+	if ((opt & OPT_ESP_PLAIN) && (opt & OPT_ESP_ENC))
+		bb_error_msg_and_die("use -e or -E, not both");
+	if (opt & OPT_ESP_ENC)
+		esp_spi = xstrtou_range(str_E, 16, 1, 0xffffffffu);
+#endif
 	if (opt & OPT_s)
 		datalen = xatou16(str_s); // -s
 	if (opt & OPT_I) { // -I
