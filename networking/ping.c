@@ -820,6 +820,76 @@ static void ping_esp_plain(len_and_sockaddr *lsa)
 			goto send_ping;
 	}
 }
+
+static void sendping_esp_enc(int junk UNUSED_PARAM)
+{
+	struct esp_echo_hdr *eh = G.snd_packet;
+
+	memset(eh, 0, sizeof(*eh) + datalen);
+	eh->sub_type = ESP_ECHO_REQUEST;
+	eh->flags    = 0;
+	eh->data_len = htons(datalen);
+	/* id is overwritten by kernel (inet_sport); seq is ours */
+	eh->seq      = htons(G.ntransmitted);
+	*(uint32_t *)(eh + 1) = G.cur_us = monotonic_us();
+
+	sendping_tail(sendping_esp_enc, sizeof(*eh));
+}
+
+static int unpack_esp_enc(char *buf, int sz, struct sockaddr_in *from)
+{
+	struct esp_echo_hdr *eh = (struct esp_echo_hdr *)buf;
+	uint16_t recv_seq;
+	uint32_t *tp = NULL;
+
+	if (sz < (int)sizeof(*eh))
+		return 0;
+	if (eh->sub_type != ESP_ECHO_RESPONSE)
+		return 0;
+
+	recv_seq = ntohs(eh->seq);
+	if (sz >= (int)(sizeof(*eh) + sizeof(uint32_t)))
+		tp = (uint32_t *)(eh + 1);
+
+	unpack_tail(sz, tp,
+		inet_ntoa(*(struct in_addr *)&from->sin_addr.s_addr),
+		recv_seq, 0 /* TTL not available on DGRAM socket */);
+	return 1;
+}
+
+static void ping_esp_enc(len_and_sockaddr *lsa)
+{
+	pingaddr.sin = lsa->u.sin;
+	if (source_lsa)
+		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
+
+	setsockopt_SOL_SOCKET_int(pingsock, SO_RCVBUF,
+				  (datalen * 2) + 7 * 1024);
+
+	signal(SIGINT, print_stats_and_exit);
+
+ send_ping:
+	sendping_esp_enc(0);
+
+	while (1) {
+		struct sockaddr_in from;
+		socklen_t fromlen = sizeof(from);
+		int c;
+
+		c = recvfrom(pingsock, G.rcv_packet, G.sizeof_rcv_packet, 0,
+				(struct sockaddr *)&from, &fromlen);
+		if (c < 0) {
+			if (errno != EINTR)
+				bb_simple_perror_msg("recvfrom");
+			continue;
+		}
+		c = unpack_esp_enc(G.rcv_packet, c, &from);
+		if (pingcount && G.nreceived >= pingcount)
+			break;
+		if (c && (option_mask32 & OPT_A))
+			goto send_ping;
+	}
+}
 #endif /* ENABLE_FEATURE_ESP_PING */
 static int unpack4(char *buf, int sz, struct sockaddr_in *from)
 {
@@ -1048,7 +1118,21 @@ static void ping(len_and_sockaddr *lsa)
 	printf(": %d data bytes\n", datalen);
 
 #if ENABLE_FEATURE_ESP_PING
-	if (option_mask32 & (OPT_ESP_PLAIN | OPT_ESP_ENC)) {
+	if (option_mask32 & OPT_ESP_ENC) {
+		uint32_t be_spi = htonl(esp_spi);
+		int sock = xsocket(AF_INET, SOCK_DGRAM, IPPROTO_ESP);
+		setsockopt(sock, IPPROTO_IP, IP_ESP_PING_SPI,
+			   &be_spi, sizeof(be_spi));
+		if (str_I)
+			setsockopt_bindtodevice(sock, str_I);
+		xmove_fd(sock, pingsock);
+		G.sizeof_rcv_packet = sizeof(struct esp_echo_hdr) + datalen + 4;
+		G.rcv_packet = xzalloc(G.sizeof_rcv_packet);
+		G.snd_packet = xzalloc(sizeof(struct esp_echo_hdr) + datalen + 4);
+		ping_esp_enc(lsa);
+		return;
+	}
+	if (option_mask32 & OPT_ESP_PLAIN) {
 		int sock = xsocket(AF_INET, SOCK_RAW, IPPROTO_ESP);
 		if (str_I)
 			setsockopt_bindtodevice(sock, str_I);
