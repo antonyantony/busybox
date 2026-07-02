@@ -756,16 +756,42 @@ static void sendping_esp_plain(int junk UNUSED_PARAM)
 	sendping_tail(sendping_esp_plain, sizeof(*pkt));
 }
 
-static int unpack_esp_plain(char *buf, int sz, struct sockaddr_in *from)
+/* IPv4 raw sockets include the IP header on receive; IPv6 raw sockets
+ * never do (there is no IPV6_HDRINCL-for-recv). So unlike unpack4()/
+ * unpack6(), one function has to handle both layouts here, since -e
+ * shares sendping_esp_plain()/ping_esp_plain() across both families.
+ */
+static int unpack_esp_plain(char *buf, int sz, struct sockaddr *from, sa_family_t af IF_NOT_PING6(UNUSED_PARAM))
 {
-	struct iphdr *iph = (struct iphdr *)buf;
-	int hlen = iph->ihl << 2;
-	uint32_t *esph = (uint32_t *)(buf + hlen);
+	uint32_t *esph;
 	struct esp_echo_hdr *eh;
 	uint16_t recv_seq;
 	uint32_t *tp = NULL;
+	int ttl = 0;
+	const char *from_str;
+#if ENABLE_PING6
+	char addrbuf[INET6_ADDRSTRLEN];
 
-	sz -= hlen;
+	if (af == AF_INET6) {
+		/* no IPv6 header prefix to skip; hop limit would need
+		 * IPV6_HOPLIMIT ancillary data (see ping6()) - not wired up
+		 * here, same "TTL not shown" tradeoff already accepted for -E
+		 */
+		esph = (uint32_t *)buf;
+		from_str = inet_ntop(AF_INET6, &((struct sockaddr_in6 *)from)->sin6_addr,
+				      addrbuf, sizeof(addrbuf));
+	} else
+#endif
+	{
+		struct iphdr *iph = (struct iphdr *)buf;
+		int hlen = iph->ihl << 2;
+
+		sz -= hlen;
+		esph = (uint32_t *)(buf + hlen);
+		ttl = iph->ttl;
+		from_str = inet_ntoa(*(struct in_addr *)&((struct sockaddr_in *)from)->sin_addr.s_addr);
+	}
+
 	if (sz < (int)(2 * sizeof(uint32_t) + sizeof(struct esp_echo_hdr)))
 		return 0;
 
@@ -782,9 +808,7 @@ static int unpack_esp_plain(char *buf, int sz, struct sockaddr_in *from)
 	if (sz >= (int)(2 * sizeof(uint32_t) + sizeof(*eh) + sizeof(uint32_t)))
 		tp = (uint32_t *)(eh + 1);
 
-	unpack_tail(sz, tp,
-		inet_ntoa(*(struct in_addr *)&from->sin_addr.s_addr),
-		recv_seq, iph->ttl);
+	unpack_tail(sz, tp, from_str, recv_seq, ttl);
 	return 1;
 }
 
@@ -792,14 +816,22 @@ static void ping_esp_plain(len_and_sockaddr *lsa)
 {
 	int sockopt;
 
-	pingaddr.sin = lsa->u.sin;
+#if ENABLE_PING6
+	if (lsa->u.sa.sa_family == AF_INET6)
+		pingaddr.sin6 = lsa->u.sin6;
+	else
+#endif
+		pingaddr.sin = lsa->u.sin;
 	if (source_lsa)
 		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
 
 	sockopt = (datalen * 2) + 7 * 1024;
 	setsockopt_SOL_SOCKET_int(pingsock, SO_RCVBUF, sockopt);
 
-	if (opt_ttl != 0)
+	/* IPV6_UNICAST_HOPS would be the v6 equivalent; skipped for now,
+	 * same as regular ping6()'s own "-t untested for IPv6" caveat.
+	 */
+	if (lsa->u.sa.sa_family != AF_INET6 && opt_ttl != 0)
 		setsockopt_int(pingsock, IPPROTO_IP, IP_TTL, opt_ttl);
 
 	signal(SIGINT, print_stats_and_exit);
@@ -808,7 +840,7 @@ static void ping_esp_plain(len_and_sockaddr *lsa)
 	sendping_esp_plain(0);
 
 	while (1) {
-		struct sockaddr_in from;
+		struct sockaddr_in6 from; /* big enough for sockaddr_in or _in6 */
 		socklen_t fromlen = sizeof(from);
 		int c;
 
@@ -819,7 +851,8 @@ static void ping_esp_plain(len_and_sockaddr *lsa)
 				bb_simple_perror_msg("recvfrom");
 			continue;
 		}
-		c = unpack_esp_plain(G.rcv_packet, c, &from);
+		c = unpack_esp_plain(G.rcv_packet, c, (struct sockaddr *)&from,
+				     lsa->u.sa.sa_family);
 		if (pingcount && G.nreceived >= pingcount)
 			break;
 		if (c && (option_mask32 & OPT_A))
@@ -848,11 +881,15 @@ static void sendping_esp_enc(int junk UNUSED_PARAM)
 	sendping_tail(sendping_esp_enc, sizeof(*eh) + hdr_extra);
 }
 
-static int unpack_esp_enc(char *buf, int sz, struct sockaddr_in *from)
+static int unpack_esp_enc(char *buf, int sz, struct sockaddr *from, sa_family_t af IF_NOT_PING6(UNUSED_PARAM))
 {
 	struct esp_echo_hdr *eh = (struct esp_echo_hdr *)buf;
 	uint16_t recv_seq;
 	uint32_t *tp = NULL;
+	const char *from_str;
+#if ENABLE_PING6
+	char addrbuf[INET6_ADDRSTRLEN];
+#endif
 
 	if (sz < (int)sizeof(*eh))
 		return 0;
@@ -863,15 +900,27 @@ static int unpack_esp_enc(char *buf, int sz, struct sockaddr_in *from)
 	if (sz >= (int)(sizeof(*eh) + sizeof(uint32_t)))
 		tp = (uint32_t *)(eh + 1);
 
-	unpack_tail(sz, tp,
-		inet_ntoa(*(struct in_addr *)&from->sin_addr.s_addr),
+#if ENABLE_PING6
+	if (af == AF_INET6)
+		from_str = inet_ntop(AF_INET6, &((struct sockaddr_in6 *)from)->sin6_addr,
+				      addrbuf, sizeof(addrbuf));
+	else
+#endif
+		from_str = inet_ntoa(*(struct in_addr *)&((struct sockaddr_in *)from)->sin_addr.s_addr);
+
+	unpack_tail(sz, tp, from_str,
 		recv_seq, 0 /* TTL not available on DGRAM socket */);
 	return 1;
 }
 
 static void ping_esp_enc(len_and_sockaddr *lsa)
 {
-	pingaddr.sin = lsa->u.sin;
+#if ENABLE_PING6
+	if (lsa->u.sa.sa_family == AF_INET6)
+		pingaddr.sin6 = lsa->u.sin6;
+	else
+#endif
+		pingaddr.sin = lsa->u.sin;
 	if (source_lsa)
 		xbind(pingsock, &source_lsa->u.sa, source_lsa->len);
 
@@ -884,7 +933,7 @@ static void ping_esp_enc(len_and_sockaddr *lsa)
 	sendping_esp_enc(0);
 
 	while (1) {
-		struct sockaddr_in from;
+		struct sockaddr_in6 from; /* big enough for sockaddr_in or _in6 */
 		socklen_t fromlen = sizeof(from);
 		int c;
 
@@ -895,7 +944,8 @@ static void ping_esp_enc(len_and_sockaddr *lsa)
 				bb_simple_perror_msg("recvfrom");
 			continue;
 		}
-		c = unpack_esp_enc(G.rcv_packet, c, &from);
+		c = unpack_esp_enc(G.rcv_packet, c, (struct sockaddr *)&from,
+				   lsa->u.sa.sa_family);
 		if (pingcount && G.nreceived >= pingcount)
 			break;
 		if (c && (option_mask32 & OPT_A))
@@ -1132,7 +1182,7 @@ static void ping(len_and_sockaddr *lsa)
 #if ENABLE_FEATURE_ESP_PING
 	if (option_mask32 & OPT_ESP_ENC) {
 		uint32_t be_spi = htonl(esp_spi);
-		int sock = xsocket(AF_INET, SOCK_DGRAM, IPPROTO_ESP);
+		int sock = xsocket(lsa->u.sa.sa_family, SOCK_DGRAM, IPPROTO_ESP);
 		setsockopt(sock, IPPROTO_IP, IP_ESP_PING_SPI,
 			   &be_spi, sizeof(be_spi));
 		if (str_I)
@@ -1149,7 +1199,7 @@ static void ping(len_and_sockaddr *lsa)
 		return;
 	}
 	if (option_mask32 & OPT_ESP_PLAIN) {
-		int sock = xsocket(AF_INET, SOCK_RAW, IPPROTO_ESP);
+		int sock = xsocket(lsa->u.sa.sa_family, SOCK_RAW, IPPROTO_ESP);
 		if (str_I)
 			setsockopt_bindtodevice(sock, str_I);
 		xmove_fd(sock, pingsock);
