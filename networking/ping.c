@@ -96,6 +96,7 @@
 //usage:     "\n	-e		Plain ESP ping (SPI 7/8, no SA needed)"
 //usage:     "\n	-E SPI		Encrypted ESP ping via SA with given SPI"
 //usage:     "\n	-R SPI		Reply on this SA instead of the request's own (requires -E)"
+//usage:     "\n	-o		One-way probe: R=0, no reply requested (with -e or -E)"
 //usage:	)
 //usage:
 //usage:# define ping6_trivial_usage
@@ -416,23 +417,27 @@ static int common_ping_main(sa_family_t af, char **argv)
 # ifndef IPPROTO_ESP
 #  define IPPROTO_ESP          50
 # endif
+# ifndef IPPROTO_AGGFRAG
+#  define IPPROTO_AGGFRAG      144  /* encrypted-echo socket protocol (ESP NH) */
+# endif
 # define IP_ESP_PING_SPI       53   /* setsockopt level SOL_IP */
 # define ESP_PING_SPI_REQUEST   7   /* IANA-reserved: plain echo request */
 # define ESP_PING_SPI_REPLY     8   /* IANA-reserved: plain echo reply   */
 # define ESP_ECHO_REQUEST       2   /* AGGFRAG sub-type: initiator->responder */
 # define ESP_ECHO_RESPONSE      3   /* AGGFRAG sub-type: responder->initiator */
-# define ESP_ECHO_FLAG_R     0x80   /* flags bit 7: return_spi follows header */
+# define ESP_ECHO_FLAG_R     0x80   /* flags bit 7: reply requested */
 struct esp_echo_hdr {
 	uint8_t  sub_type;
 	uint8_t  flags;
 	uint16_t data_len;
 	uint16_t id;
 	uint16_t seq;
+	uint32_t reply_spi;	/* 0 = any SA; ignored if R=0 */
 };
 #endif /* ENABLE_FEATURE_ESP_PING */
 
 /* -c NUM, -t NUM, -w NUM, -W NUM */
-#define OPT_STRING "qvAc:+s:t:+w:+W:+I:np:i:4"IF_PING6("6")IF_FEATURE_ESP_PING("eE:R:")
+#define OPT_STRING "qvAc:+s:t:+w:+W:+I:np:i:4"IF_PING6("6")IF_FEATURE_ESP_PING("eE:R:o")
 enum {
 	OPT_QUIET = 1 << 0,
 	OPT_VERBOSE = 1 << 1,
@@ -451,6 +456,7 @@ enum {
 	OPT_ESP_PLAIN = (1 << 14) * ENABLE_FEATURE_ESP_PING,  /* -e */
 	OPT_ESP_ENC   = (1 << 15) * ENABLE_FEATURE_ESP_PING,  /* -E SPI */
 	OPT_ESP_R     = (1 << 16) * ENABLE_FEATURE_ESP_PING,  /* -R SPI (requires -E) */
+	OPT_ESP_ONEWAY = (1 << 17) * ENABLE_FEATURE_ESP_PING, /* -o: R=0, no reply wanted */
 };
 
 
@@ -466,7 +472,7 @@ struct globals {
 	uint8_t pattern;
 #if ENABLE_FEATURE_ESP_PING
 	uint32_t esp_spi;  /* 0 = plain SPI 7/8 (-e), nonzero = encrypted (-E) */
-	uint32_t esp_return_spi;  /* 0 = no -R hint, nonzero = return_spi (-R) */
+	uint32_t esp_return_spi;  /* 0 = any SA, nonzero = reply_spi (-R) */
 #endif
 	unsigned tmin, tmax; /* in us */
 	unsigned long long tsum; /* in us, sum of all times */
@@ -747,7 +753,10 @@ static void sendping_esp_plain(int junk UNUSED_PARAM)
 	pkt->spi    = htonl(ESP_PING_SPI_REQUEST);
 	pkt->seq_no = htonl(G.ntransmitted);
 	pkt->eh.sub_type = ESP_ECHO_REQUEST;
-	pkt->eh.flags    = 0;
+	if (!(option_mask32 & OPT_ESP_ONEWAY)) {
+		pkt->eh.flags    = ESP_ECHO_FLAG_R;
+		pkt->eh.reply_spi = htonl(ESP_PING_SPI_REPLY);
+	}
 	pkt->eh.data_len = htons(datalen);
 	pkt->eh.id       = myid;
 	pkt->eh.seq      = htons(G.ntransmitted);
@@ -863,22 +872,20 @@ static void ping_esp_plain(len_and_sockaddr *lsa)
 static void sendping_esp_enc(int junk UNUSED_PARAM)
 {
 	struct esp_echo_hdr *eh = G.snd_packet;
-	/* return_spi (if -R) sits between the header and the timestamp/data */
-	int hdr_extra = esp_return_spi ? (int)sizeof(uint32_t) : 0;
-	uint8_t *data = (uint8_t *)(eh + 1) + hdr_extra;
+	uint8_t *data = (uint8_t *)(eh + 1);
 
-	memset(eh, 0, sizeof(*eh) + hdr_extra + datalen);
+	memset(eh, 0, sizeof(*eh) + datalen);
 	eh->sub_type = ESP_ECHO_REQUEST;
+	/* R=1 so the responder replies; reply_spi 0 = any SA, -R pins one */
+	if (!(option_mask32 & OPT_ESP_ONEWAY))
+		eh->flags = ESP_ECHO_FLAG_R;
 	eh->data_len = htons(datalen);
 	/* id is overwritten by kernel (inet_sport); seq is ours */
 	eh->seq      = htons(G.ntransmitted);
-	if (esp_return_spi) {
-		eh->flags = ESP_ECHO_FLAG_R;
-		*(uint32_t *)(eh + 1) = htonl(esp_return_spi);
-	}
+	eh->reply_spi = htonl(esp_return_spi);
 	*(uint32_t *)data = G.cur_us = monotonic_us();
 
-	sendping_tail(sendping_esp_enc, sizeof(*eh) + hdr_extra);
+	sendping_tail(sendping_esp_enc, sizeof(*eh));
 }
 
 static int unpack_esp_enc(char *buf, int sz, struct sockaddr *from, sa_family_t af IF_NOT_PING6(UNUSED_PARAM))
@@ -1182,7 +1189,7 @@ static void ping(len_and_sockaddr *lsa)
 #if ENABLE_FEATURE_ESP_PING
 	if (option_mask32 & OPT_ESP_ENC) {
 		uint32_t be_spi = htonl(esp_spi);
-		int sock = xsocket(lsa->u.sa.sa_family, SOCK_DGRAM, IPPROTO_ESP);
+		int sock = xsocket(lsa->u.sa.sa_family, SOCK_DGRAM, IPPROTO_AGGFRAG);
 		setsockopt(sock, IPPROTO_IP, IP_ESP_PING_SPI,
 			   &be_spi, sizeof(be_spi));
 		if (str_I)
@@ -1190,11 +1197,7 @@ static void ping(len_and_sockaddr *lsa)
 		xmove_fd(sock, pingsock);
 		G.sizeof_rcv_packet = sizeof(struct esp_echo_hdr) + datalen + 4;
 		G.rcv_packet = xzalloc(G.sizeof_rcv_packet);
-		/* +4 for return_spi if -R: responses never carry it, only
-		 * requests do, so only the send buffer needs the extra room.
-		 */
-		G.snd_packet = xzalloc(sizeof(struct esp_echo_hdr)
-				+ (esp_return_spi ? 4 : 0) + datalen + 4);
+		G.snd_packet = xzalloc(sizeof(struct esp_echo_hdr) + datalen + 4);
 		ping_esp_enc(lsa);
 		return;
 	}
@@ -1259,9 +1262,13 @@ static int common_ping_main(int opt, char **argv)
 		bb_error_msg_and_die("use -e or -E, not both");
 	if (opt & OPT_ESP_ENC)
 		esp_spi = xstrtou_range(str_E, 16, 1, 0xffffffffu);
+	if ((opt & OPT_ESP_ONEWAY) && !(opt & (OPT_ESP_PLAIN | OPT_ESP_ENC)))
+		bb_error_msg_and_die("-o requires -e or -E");
 	if (opt & OPT_ESP_R) {
 		if (!(opt & OPT_ESP_ENC))
 			bb_error_msg_and_die("-R requires -E");
+		if (opt & OPT_ESP_ONEWAY)
+			bb_error_msg_and_die("-R and -o are mutually exclusive");
 		esp_return_spi = xstrtou_range(str_R, 16, 1, 0xffffffffu);
 	}
 #endif
